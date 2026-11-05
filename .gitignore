@@ -1,0 +1,26 @@
+# --- Dependencies ---
+node_modules/
+.bun-cache/
+
+# --- Build output (anchored to repo root) ---
+/build/
+dist/
+dist-node/
+ts-dist/
+out/
+.turbo/
+*.bun-build
+tsconfig.tsbuildinfo
+
+# --- Local-only backups ---
+backup/
+
+# --- Logs & secrets ---
+*.log
+.env
+.env.*
+
+# --- OS junk ---
+Thumbs.db
+.DS_Store
+desktop.ini
