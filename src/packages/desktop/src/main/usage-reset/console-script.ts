@@ -73,6 +73,11 @@ $restartExe = ${ps(options.restart.executable)}
 $restartArgs = ${ps(argumentList)}
 $restartCwd = ${ps(options.restart.directory)}
 
+$torProxy = 'http://127.0.0.1:9250'
+$torData = Join-Path $env:TEMP 'focustor-data'
+$viaTor = $false
+$torProcess = $null
+
 function Step($text) { Write-Host "  > $text" -ForegroundColor DarkGray }
 function Ok($text) { Write-Host "  + $text" -ForegroundColor Green }
 function Bad($text) { Write-Host "  x $text" -ForegroundColor Red }
@@ -103,7 +108,103 @@ function TraceIp {
     Select-Object -First 1
 }
 
+# Strict tor-only trace: never falls back to the direct request, so a still-bootstrapping
+# tunnel reads as no address instead of the machine's own one.
+function TraceTor {
+  $request = @{
+    UseBasicParsing = $true
+    Uri = 'https://www.cloudflare.com/cdn-cgi/trace'
+    TimeoutSec = 12
+  }
+
+  try {
+    $content = (Invoke-WebRequest @request -Proxy $torProxy).Content
+  } catch {
+    return $null
+  }
+
+  $content -split '\\r?\\n' |
+    Where-Object { $_ -match '^ip=' } |
+    ForEach-Object { $_.Substring(3).Trim() } |
+    Select-Object -First 1
+}
+
+# Finds a tor.exe: PATH first, then the expert bundle and Tor Browser installs.
+function FindTor {
+  $candidates = @(
+    (Join-Path $env:ProgramFiles 'Tor\\Tor\\tor.exe'),
+    (Join-Path $env:ProgramFiles 'Tor Browser\\Browser\\TorBrowser\\Tor\\tor.exe'),
+    (Join-Path $env:LOCALAPPDATA 'Tor Browser\\Browser\\TorBrowser\\Tor\\tor.exe'),
+    (Join-Path $env:USERPROFILE 'Desktop\\Tor Browser\\Browser\\TorBrowser\\Tor\\tor.exe')
+  )
+
+  $x86 = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
+
+  if ($x86) {
+    $candidates = @((Join-Path $x86 'Tor\\Tor\\tor.exe')) + $candidates
+  }
+
+  try {
+    $paths = @((where.exe tor 2> $null) | Where-Object { $_ -match '\\.exe\\z' })
+    if ($paths.Count -gt 0) { $candidates = $paths + $candidates }
+  } catch {}
+
+  foreach ($path in $candidates) {
+    if ($path -and (Test-Path -LiteralPath $path.Trim() -PathType Leaf)) {
+      return $path.Trim()
+    }
+  }
+
+  return $null
+}
+
+# Stops the background opencode engine that outlives the app: it is a detached service, survives
+# FocusCode closing, and the relaunched app would otherwise adopt it with API connections that may
+# pre-date the reset. Scoped to engines launched from FocusCode (staged opencode-cli under the app's
+# data dir, or bun running the bundled source); an opencode the user installed elsewhere survives.
+function StopEngine {
+  try {
+    Get-CimInstance Win32_Process -ErrorAction Stop |
+      Where-Object {
+        $_.Name -like 'opencode-cli*.exe' -and
+        $_.CommandLine -and $_.CommandLine.Contains('serve')
+      } |
+      ForEach-Object {
+        try { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop } catch {}
+      }
+  } catch {}
+
+  try {
+    Get-CimInstance Win32_Process -Filter "Name = 'bun.exe'" -ErrorAction Stop |
+      Where-Object {
+        $_.CommandLine -and $_.CommandLine.Contains('focuscode') -and $_.CommandLine.Contains('serve')
+      } |
+      ForEach-Object {
+        try { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop } catch {}
+      }
+  } catch {}
+
+  Start-Sleep -Milliseconds 400
+}
+
+# Kills a tor binary previously spawned by this script (recognised by the focustor
+# data directory in its command line) so a new start gets fresh circuits. A user's
+# own tor, such as Tor Browser's, has a different command line and survives.
+function KillOldTor {  try {
+    Get-CimInstance Win32_Process -Filter "Name = 'tor.exe'" -ErrorAction Stop |
+      Where-Object { $_.CommandLine -and $_.CommandLine.Contains('focustor') } |
+      ForEach-Object {
+        try { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop } catch {}
+      }
+  } catch {}
+
+  Start-Sleep -Milliseconds 500
+}
+
 $failure = $null
+$warpDone = $false
+$refusals = 0
+$sameIp = 0
 
 try {
   Step 'closing FocusCode...'
@@ -120,61 +221,178 @@ try {
 
   Start-Sleep -Milliseconds 400
 
+  Step 'stopping the background engine so the fresh session starts clean...'
+  StopEngine
+
   $before = $null
   try { $before = TraceIp } catch {}
 
   Step 'asking Cloudflare for a fresh registration...'
 
-  & $cli --accept-tos --no-ansi disconnect | Out-Null
-  if ($LASTEXITCODE -ne 0) { throw 'WARP disconnect failed.' }
+  for ($attempt = 1; $attempt -le 4; $attempt++) {
+    if ($attempt -gt 1) {
+      $backoff = [int](5 * [Math]::Pow(2, $attempt - 2) + (Get-Random -Minimum 0 -Maximum 4))
+      Step "attempt $attempt of 4: waiting $backoff seconds for the rate-limit window..."
 
-  & $cli --accept-tos --no-ansi registration delete | Out-Null
-  if ($LASTEXITCODE -ne 0) { throw 'WARP registration deletion failed.' }
+      Start-Sleep -Seconds $backoff
+    }
 
-  & $cli --accept-tos --no-ansi registration new | Out-Null
-  if ($LASTEXITCODE -ne 0) { throw 'WARP refused the new registration.' }
+    & $cli --accept-tos --no-ansi disconnect | Out-Null
+    if ($LASTEXITCODE -ne 0) { Step 'already disconnected.' }
 
-  & $cli --accept-tos --no-ansi connect | Out-Null
-  if ($LASTEXITCODE -ne 0) { throw 'WARP refused to connect.' }
+    & $cli --accept-tos --no-ansi registration delete | Out-Null
+    if ($LASTEXITCODE -ne 0) { Step 'no old registration to delete; continuing.' }
 
-  Step 'waiting for the new address...'
+    & $cli --accept-tos --no-ansi registration new | Out-Null
 
-  $after = $null
-  $deadline = (Get-Date).AddSeconds(25)
+    if ($LASTEXITCODE -ne 0) {
+      Start-Sleep -Seconds 8
+      & $cli --accept-tos --no-ansi registration new | Out-Null
+    }
 
-  while ((Get-Date) -lt $deadline) {
-    try {
-      $ip = TraceIp
-      if ($ip -and $ip -ne $before) {
-        $after = $ip
-        break
+    if ($LASTEXITCODE -ne 0) {
+      $failure = 'WARP refused the new registration (Cloudflare often rate-limits these after a few resets).'
+      $refusals = $refusals + 1
+      if ($refusals -ge 2) { break }
+
+      continue
+    }
+
+    $refusals = 0
+
+    & $cli --accept-tos --no-ansi connect | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+      Start-Sleep -Seconds 3
+      & $cli --accept-tos --no-ansi connect | Out-Null
+    }
+
+    if ($LASTEXITCODE -ne 0) { throw 'WARP refused to connect.' }
+
+    Step 'waiting for the new address...'
+
+    $after = $null
+    $deadline = (Get-Date).AddSeconds(25)
+
+    while ((Get-Date) -lt $deadline) {
+      try {
+        $ip = TraceIp
+        if ($ip -and $ip -ne $before) {
+          $after = $ip
+          break
+        }
+      } catch {}
+
+      Start-Sleep -Milliseconds 500
+    }
+
+    if ($after) {
+      Write-Host ''
+
+      if ($before) {
+        Ok "new ip: $after (was $before)"
+      } else {
+        Ok "new ip: $after"
       }
-    } catch {}
 
-    Start-Sleep -Milliseconds 500
+      Ok 'done. back to vibecoding.'
+
+      $warpDone = $true
+      break
+    }
+
+    $failure = 'WARP connected, but the address did not change in time.'
+    $sameIp = $sameIp + 1
+    if ($sameIp -ge 2) { break }
   }
-
-  if (-not $after) {
-    throw 'WARP connected, but the address did not change in time.'
-  }
-
-  Write-Host ''
-
-  if ($before) {
-    Ok "new ip: $after (was $before)"
-  } else {
-    Ok "new ip: $after"
-  }
-
-  Ok 'done. back to vibecoding.'
-
 } catch {
   $failure = $_.Exception.Message
+}
+
+# WARP exhausted: Cloudflare refused or handed back the same address. Different transport
+# instead of a third registration: tor on a dedicated HTTP tunnel port, which both the app
+# (Chromium proxy switch) and the engine (HTTPS_PROXY) can traverse; socks5 by contrast
+# stops the engine bridge.
+if (-not $warpDone) {
   Write-Host ''
   Bad "reset failed: $failure"
+
+  Step 'falling back to a tor exit so the ip still changes...'
+
+  $torExe = FindTor
+
+  if ($torExe) {
+    Step "using $torExe"
+
+    KillOldTor
+
+    try {
+      $torProcess = Start-Process -FilePath $torExe -ArgumentList @('--HTTPTunnelPort', '9250', '--SocksPort', '0', '--DataDirectory', $torData) -WindowStyle Hidden -PassThru -ErrorAction Stop
+      Start-Sleep -Seconds 2
+    } catch {
+      $torProcess = $null
+    }
+
+    if ($torProcess) {
+      Step 'waiting for tor to pick an exit node (up to 90 seconds)...'
+
+      $after = $null
+      $gone = $false
+      $torDeadline = (Get-Date).AddSeconds(90)
+
+      while ((Get-Date) -lt $torDeadline) {
+        $gone = $false
+        try { $gone = [bool]$torProcess.HasExited } catch {}
+
+        if ($gone) { break }
+
+        try {
+          $ip = TraceTor
+          if ($ip -and $ip -ne $before) { $after = $ip; break }
+        } catch {}
+
+        Start-Sleep -Milliseconds 1500
+      }
+
+      if ($after) {
+        $viaTor = $true
+        $failure = $null
+
+        Write-Host ''
+        Ok "new ip: $after (via tor)"
+        Ok 'done. back to vibecoding.'
+      } else {
+        KillOldTor
+
+        if ($gone) {
+          Bad 'tor exited immediately (port busy, or this tor build lacks HTTPTunnelPort).'
+        } else {
+          Bad 'tor did not deliver an address in time.'
+        }
+      }
+    } else {
+      Bad 'tor could not be started.'
+    }
+  } else {
+    Bad 'no tor.exe found on this machine (install Tor Browser or the Tor expert bundle).'
+  }
+
+  if (-not $viaTor) {
+    Step 'reconnecting the tunnel so the machine still has net...'
+
+    & $cli --accept-tos --no-ansi connect | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+      & $cli --accept-tos --no-ansi registration new | Out-Null
+      & $cli --accept-tos --no-ansi connect | Out-Null
+    }
+  }
 }
 
 Write-Host ''
+
+if ($viaTor) {
+  $proxy = $torProxy
+  $proxied = $true
+}
 
 if ($proxied) {
   Step 'pointing FocusCode at the new address...'
@@ -194,6 +412,10 @@ if ($proxied) {
   Remove-Item Env:HTTPS_PROXY -ErrorAction SilentlyContinue
   Remove-Item Env:HTTP_PROXY -ErrorAction SilentlyContinue
   Remove-Item Env:FOCUSCODE_PROXY -ErrorAction SilentlyContinue
+}
+
+if ($viaTor -and -not $automatic) {
+  Write-Host ' (tor keeps running in the background; a new reset will pick up a fresh exit.)'
 }
 
 Step 'detaching FocusCode from the terminal...'
