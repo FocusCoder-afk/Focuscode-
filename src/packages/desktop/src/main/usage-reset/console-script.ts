@@ -158,33 +158,15 @@ function FindTor {
   return $null
 }
 
-# Stops the background opencode engine that outlives the app: it is a detached service, survives
-# FocusCode closing, and the relaunched app would otherwise adopt it with API connections that may
-# pre-date the reset. Scoped to engines launched from FocusCode (staged opencode-cli under the app's
-# data dir, or bun running the bundled source); an opencode the user installed elsewhere survives.
+# Ends every bun.exe and opencode*.exe on the machine, engine or not. This is deliberately blunt: a
+# surviving engine gets adopted by the relaunched app with pre-reset API connections, which reads as
+# a failed reset. Collateral is accepted: other bun projects lose their processes until relaunched.
 function StopEngine {
-  try {
-    Get-CimInstance Win32_Process -ErrorAction Stop |
-      Where-Object {
-        $_.Name -like 'opencode-cli*.exe' -and
-        $_.CommandLine -and $_.CommandLine.Contains('serve')
-      } |
-      ForEach-Object {
-        try { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop } catch {}
-      }
-  } catch {}
+  foreach ($name in @('bun', 'opencode*')) {
+    try { Stop-Process -Name $name -Force -ErrorAction SilentlyContinue } catch {}
+  }
 
-  try {
-    Get-CimInstance Win32_Process -Filter "Name = 'bun.exe'" -ErrorAction Stop |
-      Where-Object {
-        $_.CommandLine -and $_.CommandLine.Contains('focuscode') -and $_.CommandLine.Contains('serve')
-      } |
-      ForEach-Object {
-        try { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop } catch {}
-      }
-  } catch {}
-
-  Start-Sleep -Milliseconds 400
+  Start-Sleep -Milliseconds 600
 }
 
 # Kills a tor binary previously spawned by this script (recognised by the focustor
