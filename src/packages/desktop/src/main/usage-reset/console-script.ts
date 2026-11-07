@@ -75,6 +75,18 @@ $restartExe = ${ps(options.restart.executable)}
 $restartArgs = ${ps(argumentList)}
 $restartCwd = ${ps(options.restart.directory)}
 
+# The automatic window is created hidden, so the transcript is the only visible record for
+# reviewing overnight resets; a manual run keeps its console instead.
+$transcript = $null
+if ($automatic) {
+  try {
+    $transcript = Join-Path $env:TEMP ('focuscode-reset-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.log')
+    Start-Transcript -Path $transcript -ErrorAction Stop | Out-Null
+  } catch {
+    $transcript = $null
+  }
+}
+
 $torProxy = 'http://127.0.0.1:9250'
 $torData = Join-Path $env:TEMP 'focustor-data'
 $viaTor = $false
@@ -545,7 +557,18 @@ Write-Host '========================================' -ForegroundColor Cyan
 Write-Host ' Finished. Check the messages above.' -ForegroundColor Cyan
 Write-Host '========================================' -ForegroundColor Cyan
 
-Read-Host 'Press Enter to close this window'
+# Both run shapes close themselves now: an automatic run is created hidden and a manual one gets a
+# short beat to read the tail of the run. Neither waits for a keypress anymore, so no window can
+# park itself in the taskbar and block later ones.
+try { Stop-Transcript | Out-Null } catch {}
+
+$settleSeconds = 30
+
+if ($automatic) {
+  $settleSeconds = 20
+}
+
+Start-Sleep -Seconds $settleSeconds
 
 if ($failure) { exit 1 }
 exit 0

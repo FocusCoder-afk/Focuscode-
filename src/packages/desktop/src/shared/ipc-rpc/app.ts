@@ -95,6 +95,12 @@ export const AppSetUsageAutoReset = Rpc.make("AppSetUsageAutoReset", {
   payload: { enabled: Schema.Boolean },
 })
 
+// Epoch ms of the last automatic reset that needs a failed prompt replayed (0 = none). Read twice
+// without clearing means two boots replay once: the admission is idempotent on the original prompt ID.
+export const AppGetUsageAutoContinue = Rpc.make("AppGetUsageAutoContinue", { success: Schema.Number })
+
+export const AppClearUsageAutoContinue = Rpc.make("AppClearUsageAutoContinue")
+
 export const AppRpcs = RpcGroup.make(
   AppAwaitInitialization,
   AppReconnectService,
@@ -115,4 +121,6 @@ export const AppRpcs = RpcGroup.make(
   AppResetUsage,
   AppGetUsageAutoReset,
   AppSetUsageAutoReset,
+  AppGetUsageAutoContinue,
+  AppClearUsageAutoContinue,
 )

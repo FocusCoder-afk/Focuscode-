@@ -37,7 +37,8 @@ export function transitionUsageReset(state: UsageResetState, event: UsageResetEv
         : { status: "failed", reason: event.reason }
 
     case "reset.started":
-      return state.status === "working" ? { status: "restarting" } : state
+      // Main pushes this event for automatic resets too, where no click ever set `working`.
+      return state.status === "idle" || state.status === "working" ? { status: "restarting" } : state
 
     case "reset.done":
       return state.status === "working" ? { status: "restarting" } : state

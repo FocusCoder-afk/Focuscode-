@@ -31,6 +31,9 @@ export function createDesktopPlatform(api: ElectronAPI, windowState: DesktopWind
     resetUsage: () => api.resetUsage(),
     getUsageAutoReset: () => api.getUsageAutoReset(),
     setUsageAutoReset: (enabled) => api.setUsageAutoReset(enabled),
+    getUsageAutoContinue: () => api.getUsageAutoContinue(),
+    clearUsageAutoContinue: () => api.clearUsageAutoContinue(),
+    onUsageResetStarted: (callback) => api.onUsageResetStarted(callback),
     notify: createDesktopNotify(api),
     fetch: (input, init) => {
       if (input instanceof Request) return fetch(input)

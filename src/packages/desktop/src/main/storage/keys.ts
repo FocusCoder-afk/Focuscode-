@@ -17,3 +17,5 @@ export const WINDOW_IDS_KEY = "windowIds"
 export const BUNDLED_CLI_VERSION_KEY = "bundledCliVersion"
 
 export const USAGE_AUTO_RESET_KEY = "usageAutoReset"
+
+export const USAGE_AUTO_CONTINUE_KEY = "usageAutoContinueAt"

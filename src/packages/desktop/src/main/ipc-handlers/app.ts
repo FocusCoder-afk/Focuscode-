@@ -69,6 +69,8 @@ export const appHandlers = AppRpcs.toLayer(
       AppRelaunch: () => Effect.sync(lifecycle.relaunch),
       AppGetUsageAutoReset: () => Effect.sync(() => UsageAutoReset.enabled()),
       AppSetUsageAutoReset: ({ enabled }) => Effect.sync(() => UsageAutoReset.setEnabled(enabled)),
+      AppGetUsageAutoContinue: () => Effect.sync(() => UsageAutoReset.autoContinueAt()),
+      AppClearUsageAutoContinue: () => Effect.sync(() => UsageAutoReset.clearAutoContinue()),
       AppResetUsage: () =>
         promise(() => UsageReset.resetUsage()).pipe(
           Effect.tap((result) =>

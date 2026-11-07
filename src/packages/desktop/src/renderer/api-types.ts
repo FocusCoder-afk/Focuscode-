@@ -63,6 +63,9 @@ export type ElectronAPI = {
   resetUsage(): Promise<UsageResetResult>
   getUsageAutoReset(): Promise<boolean>
   setUsageAutoReset(enabled: boolean): Promise<void>
+  getUsageAutoContinue(): Promise<number>
+  clearUsageAutoContinue(): Promise<void>
+  onUsageResetStarted(cb: (data: { automatic: boolean }) => void): () => void
   getZoomFactor(): Promise<number>
   setZoomFactor(factor: number): Promise<void>
   getPinchZoomEnabled(): Promise<boolean>

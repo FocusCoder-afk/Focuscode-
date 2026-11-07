@@ -1,7 +1,7 @@
 import { useDialog } from "@opencode/ui/context/dialog"
 import { Icon } from "@opencode/ui/icon"
 import { Loader } from "@opencode/ui/loader"
-import { createEffect, createSignal, Show } from "solid-js"
+import { createEffect, createSignal, onCleanup, Show } from "solid-js"
 import { useLanguage } from "@/runtime/i18n/language"
 import { usePlatform } from "@/runtime/platform/platform"
 import { UsageResetDialog } from "./dialog"
@@ -47,6 +47,22 @@ export function UsageResetButton() {
 
     dispatch({ type: "reset.done" })
   }
+
+  // Main pushes this for automatic resets while the user is mid-prompt, so the pill flips to
+  // Restarting even though nobody touched the corner control; unlisten ties it to this mount.
+  createEffect(() => {
+    const started = platform.onUsageResetStarted
+
+    if (!started) return
+
+    onCleanup(
+      started((data) => {
+        if (!data.automatic && isUsageResetBusy(machine())) return
+
+        dispatch({ type: "reset.started" })
+      }),
+    )
+  })
 
   createEffect(() => {
     const state = machine()

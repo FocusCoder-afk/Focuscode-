@@ -3,7 +3,14 @@ import { Toast, showToast, type ToastOptions } from "@opencode/ui/toast"
 import { createEffect, type JSX } from "solid-js"
 import { Predicate } from "effect"
 import { useLanguage } from "@/runtime/i18n/language"
-import { acknowledgeLocalStorageNotice, localStorageNoticePending } from "@/runtime/persistence/storage"
+import {
+  acknowledgeLocalStorageNotice,
+  localStorageNoticePending,
+} from "@/runtime/persistence/storage"
+import {
+  acknowledgeUsageAutoContinue,
+  usageAutoContinueNotice,
+} from "@/runtime/persistence/usage-notice"
 
 type AppToastOptions = Omit<ToastOptions, "icon"> & {
   icon?: IconProps["name"]
@@ -20,6 +27,22 @@ export function ToastRegion() {
       variant: "error",
       title: language.t("toast.storage.writeFailed.title"),
       description: language.t("toast.storage.writeFailed.description"),
+    })
+  })
+
+  // The usage reset replay reports through a signal, so the notice translates here with the language context.
+  createEffect(() => {
+    const notice = usageAutoContinueNotice()
+
+    if (!notice) return
+
+    acknowledgeUsageAutoContinue()
+    showAppToast({
+      variant: notice === "failed" ? "error" : "success",
+      title: language.t(notice === "failed" ? "usageAutoContinue.failed.title" : "usageAutoContinue.resumed.title"),
+      description: language.t(
+        notice === "failed" ? "usageAutoContinue.failed.description" : "usageAutoContinue.resumed.description",
+      ),
     })
   })
 

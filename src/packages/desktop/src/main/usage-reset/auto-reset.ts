@@ -4,7 +4,7 @@ import { closeSync, existsSync, openSync, readSync, readdirSync, statSync } from
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { app } from "electron"
-import { USAGE_AUTO_RESET_KEY } from "../storage/keys"
+import { USAGE_AUTO_CONTINUE_KEY, USAGE_AUTO_RESET_KEY } from "../storage/keys"
 import { getStore } from "../storage/store"
 import { UsageReset } from "./index"
 
@@ -33,6 +33,23 @@ export function setEnabled(value: boolean) {
   getStore().set(USAGE_AUTO_RESET_KEY, value)
 }
 
+// A retry the engine scheduled for an interrupted turn lives in memory and dies with the killed
+// engine, so the reset relaunch has to hand the failed prompt back itself. The marker is armed
+// only when the reset was automatic; a manual reset has a human at the composer already.
+export function armAutoContinue() {
+  if (!enabled()) return
+  getStore().set(USAGE_AUTO_CONTINUE_KEY, Date.now())
+}
+
+export function autoContinueAt() {
+  const at = getStore().get(USAGE_AUTO_CONTINUE_KEY)
+  return typeof at === "number" && Number.isFinite(at) ? at : 0
+}
+
+export function clearAutoContinue() {
+  getStore().delete(USAGE_AUTO_CONTINUE_KEY)
+}
+
 
 export function start() {
   const timer = setInterval(tick, poll)
@@ -58,6 +75,8 @@ function tick() {
 }
 
 async function trigger(source: string) {
+  armAutoContinue()
+
   const result = await UsageReset.resetUsage({ automatic: true }).catch(() => undefined)
 
   if (result?.status === "started") {

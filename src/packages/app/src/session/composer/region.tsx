@@ -33,6 +33,7 @@ import type { SessionScreenLayout } from "../screen-layout"
 import { syncPromptModel } from "../session-model-helpers"
 import type { SessionTimelineInteraction } from "../timeline/interaction"
 import { createSessionRevert } from "../revert"
+import { attemptUsageAutoContinue } from "../auto-continue"
 import { useSessionFork } from "../fork"
 import { SessionComposerRegion } from "./session-composer-region"
 import { createSessionComposerController, type SessionComposerController } from "./controller"
@@ -292,6 +293,16 @@ export function createActiveSessionRegion(input: {
   const notifyFailed = () => {
     showToast({ title: language.t("common.requestFailed") })
   }
+
+  // A limit failure that met an automatic reset has no engine retry timer to lean on; this
+  // region replay its prompt once the history is populated after the relaunch.
+  createEffect(() => {
+    const messages = input.session.history.messages()
+
+    if (messages.length === 0) return
+
+    void attemptUsageAutoContinue({ platform, session: input.session, data })
+  })
 
   const pendingSteer: TimelinePendingActions = {
     status: (sessionID, messageID) => data.session.pending.status(sessionID, messageID),

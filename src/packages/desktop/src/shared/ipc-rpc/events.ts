@@ -76,9 +76,16 @@ export class SidecarChanged extends Schema.TaggedClass<SidecarChanged>()("Sideca
   url: Schema.String,
 }) {}
 
+// A usage reset started (automatic or via the corner control): windows show the resetting pill until
+// the relaunch closes them, so an unattended run is not mistaken for a dead prompt.
+export class UsageResetStarted extends Schema.TaggedClass<UsageResetStarted>()("UsageResetStarted", {
+  automatic: Schema.Boolean,
+}) {}
+
 export const DesktopEvent = Schema.Union([
   DeepLinksOpened,
   SidecarChanged,
+  UsageResetStarted,
   MenuCommandTriggered,
   WindowFullscreenChanged,
   WindowFocusChanged,

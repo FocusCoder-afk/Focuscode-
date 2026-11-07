@@ -81,6 +81,10 @@ export const dict = {
     "Cloudflare WARP returned an error. Check that the WARP client is running, then try again.",
   "usageReset.failed.verify":
     "WARP registered again, but FocusCode couldn’t confirm a new IP address. Check your connection, then try again.",
+  "usageAutoContinue.resumed.title": "Usage reset finished",
+  "usageAutoContinue.resumed.description": "Continuing your interrupted prompt.",
+  "usageAutoContinue.failed.title": "Usage reset couldn’t resume your prompt",
+  "usageAutoContinue.failed.description": "FocusCode retries the next time this session opens.",
   "command.session.location.cycle": "Cycle session location",
   "command.session.branch.choose": "Choose base branch",
   "session.location.toggle": "Toggle session location",

@@ -157,6 +157,15 @@ type PlatformBase = {
 
   /** Turn the automatic usage reset on or off (desktop only) */
   setUsageAutoReset?(enabled: boolean): Promise<void>
+
+  /** Epoch ms of the pending automatic-reset prompt replay, 0 when there is none (desktop only) */
+  getUsageAutoContinue?(): Promise<number>
+
+  /** Drop the pending replay marker after the prompt has been admitted again (desktop only) */
+  clearUsageAutoContinue?(): Promise<void>
+
+  /** Fires once a reset started (automatic or from the corner control) and the app is relaunching (desktop only) */
+  onUsageResetStarted?(listener: (data: { automatic: boolean }) => void): () => void
 }
 
 export type Platform = PlatformBase &

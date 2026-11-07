@@ -8,6 +8,9 @@ import { promisify } from "node:util"
 import type { UsageResetResult } from "@opencode/app/desktop"
 import { app } from "electron"
 import { Option, Schema } from "effect"
+import { UsageResetStarted } from "../../shared/ipc-rpc/events"
+import { emitIpcEvent } from "../ipc-events"
+import { getMainWindows } from "../windows"
 import { consoleScript, type RestartCommand } from "./console-script"
 
 const locate = promisify(execFile)
@@ -57,6 +60,12 @@ export async function resetUsage(options: { automatic?: boolean } = {}): Promise
       detail: error instanceof Error ? error.message : String(error),
     }
   }
+
+  // Windows learn a reset is running only after the relaunch, so an unattended run must not read
+  // as a dead prompt: emit before the app quits, while every window is still listening.
+  const automatic = options.automatic === true
+
+  getMainWindows().forEach((win) => emitIpcEvent(win.webContents, new UsageResetStarted({ automatic })))
 
   return { status: "started" }
 }
@@ -115,11 +124,22 @@ function openConsole(cli: string | undefined, restart: RestartCommand, port: num
     "utf8",
   )
 
-  spawn(
-    "cmd.exe",
-    ["/c", "start", "", "powershell.exe", "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script],
-    { cwd: process.cwd(), detached: true, stdio: "ignore", windowsHide: false },
-  ).unref()
+  const argv = ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script]
+
+  if (automatic) {
+    // Unattended run: CREATE_NO_WINDOW instead of a `start` console, so an overnight reset
+    // leaves nothing floating around to block later windows. The in-script relaunch uses its
+    // own cmd start relay, which detaches the app from this process set before it exits.
+    spawn("powershell.exe", argv, { cwd: process.cwd(), detached: true, stdio: "ignore", windowsHide: true }).unref()
+    return
+  }
+
+  spawn("cmd.exe", ["/c", "start", "", "powershell.exe", ...argv], {
+    cwd: process.cwd(),
+    detached: true,
+    stdio: "ignore",
+    windowsHide: false,
+  }).unref()
 }
 
 
