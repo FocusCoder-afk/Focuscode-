@@ -4,6 +4,10 @@ A electron app that idfk has opencode on wich has inf usage if u reset it by cli
 
 uhm
 
+BTW TO MAKE IT WORK U NEED UR WARP MODE SET TO LOCAL PROXY
+<img width="741" height="766" alt="image" src="https://github.com/user-attachments/assets/66984d05-9d81-42df-8181-3b69ef0150c1" />
+
+
 So download the zip file here 
 
 then click on build.bat and wait it takes a bit for first time
@@ -15,3 +19,5 @@ hands back the same ip. after a few resets it can refuse for a while - when that
 reset console now retries a few times and then falls back to tor automatically. for the fallback
 to work u need tor installed: either the Tor Browser or the tor expert bundle (tor.exe gets found
 via PATH, `C:\Program Files\Tor\Tor\tor.exe` or inside a Tor Browser install).
+
+
