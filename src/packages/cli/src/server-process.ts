@@ -17,6 +17,8 @@ import { ServiceConfig } from "./services/service-config"
 import { RetainedImage } from "./services/retained-image"
 import { ServiceRegistration } from "./services/service-registration"
 import { RemoteTunnel } from "./services/remote-tunnel"
+import { AuthPurge } from "./services/auth-purge"
+import { DatabaseUnify } from "./services/database-unify"
 import { WebUi } from "./services/web-ui"
 import { databasePath } from "./database-path"
 
@@ -76,6 +78,11 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
           ? Service.incumbent({ ...serviceOptions, url: serviceURL(hostname, port) })
           : undefined
       if (findIncumbent !== undefined && (yield* findIncumbent) !== undefined) return
+      // When no engine is serving, folds the other release channels' sessions into this process's database and
+      // consumes a queued usage reset marker. Both must finish before the server opens the file.
+      const database = databasePath(global.data)
+      yield* DatabaseUnify.unify(global.data, database)
+      if (AuthPurge.pending(global.state)) yield* AuthPurge.consume({ database, data: global.data, state: global.state })
       // Desktop can launch the service directly without injecting its saved environment.
       Object.assign(process.env, ServiceConfig.processEnv(config.env))
       // Keep a package-manager or curl install replaceable while the service runs; Desktop updates its own copy.

@@ -6,10 +6,11 @@ export type RestartCommand = {
 }
 
 export type ConsoleScriptOptions = {
-  cli: string
+  cli: string | undefined
   restart: RestartCommand
   port: number | undefined
   automatic: boolean
+  needsInstall: boolean
   pid: number
 }
 
@@ -64,7 +65,8 @@ Write-Host ''
 Write-Host ' hollup mate - resetting ur ip to another one so u can use ai again.' -ForegroundColor White
 Write-Host ''
 
-$cli = ${ps(options.cli)}
+$cli = ${ps(options.cli ?? "")}
+$needsInstall = ${options.needsInstall ? "$true" : "$false"}
 $appPid = ${options.pid}
 $proxy = ${ps(options.port !== undefined ? `http://127.0.0.1:${options.port}` : "")}
 $proxied = $false
@@ -172,7 +174,8 @@ function StopEngine {
 # Kills a tor binary previously spawned by this script (recognised by the focustor
 # data directory in its command line) so a new start gets fresh circuits. A user's
 # own tor, such as Tor Browser's, has a different command line and survives.
-function KillOldTor {  try {
+function KillOldTor {
+  try {
     Get-CimInstance Win32_Process -Filter "Name = 'tor.exe'" -ErrorAction Stop |
       Where-Object { $_.CommandLine -and $_.CommandLine.Contains('focustor') } |
       ForEach-Object {
@@ -181,6 +184,90 @@ function KillOldTor {  try {
   } catch {}
 
   Start-Sleep -Milliseconds 500
+}
+
+# Grabs any warp-cli.exe already on the machine so a plain reset does not reinstall anything.
+function WarpCli {
+  $candidates = @(
+    (Join-Path $env:ProgramFiles 'Cloudflare\\Cloudflare WARP\\warp-cli.exe'),
+    (Join-Path $env:LOCALAPPDATA 'Cloudflare\\Cloudflare WARP\\warp-cli.exe')
+  )
+
+  $x86 = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
+
+  if ($x86) {
+    $candidates = @((Join-Path $x86 'Cloudflare\\Cloudflare WARP\\warp-cli.exe')) + $candidates
+  }
+
+  foreach ($path in $candidates) {
+    if ((Test-Path -LiteralPath $path -PathType Leaf)) {
+      return $path
+    }
+  }
+
+  return $null
+}
+
+# No client found: download the Windows installer and run it silently. The MSI needs elevation, so Windows
+# shows one UAC prompt; a decline lands in the tor fallback instead of a manual-install lecture.
+function InstallWarp {
+  $msi = Join-Path $env:TEMP 'Cloudflare_WARP_installer.msi'
+
+  Step 'downloading the WARP client from Cloudflare...'
+  Invoke-WebRequest 'https://downloads.cloudflareclient.com/v1/download/windows/ga' -OutFile $msi -UseBasicParsing
+
+  if (-not (Test-Path -LiteralPath $msi)) {
+    throw 'the WARP installer did not finish downloading.'
+  }
+
+  Step 'installing - accept the Windows prompt if one appears...'
+  $install = Start-Process msiexec -ArgumentList @('/i', ('"' + $msi + '"'), '/qn', '/norestart') -Verb RunAs -Wait -PassThru -ErrorAction Stop
+
+  Remove-Item $msi -Force -ErrorAction SilentlyContinue
+
+  if (@(0, 3010) -notcontains $install.ExitCode) {
+    throw ("the WARP installer exited with code " + $install.ExitCode)
+  }
+  Start-Sleep -Seconds 3  
+
+  $cli = WarpCli
+
+  if (-not $cli) {
+    throw 'the install finished but warp-cli.exe is still missing.'
+  }
+
+  return $cli
+}
+
+# Drops the stored provider identity so the next engine start cannot reconnect with the same credentials, and
+# leaves a marker its boot consumes to clear the connection tables stored next to the sessions.
+function ClearAuth {
+  $authRoots = @((Join-Path $env:USERPROFILE '.local\\share\\opencode'))
+
+  if ($env:XDG_DATA_HOME) {
+    $authRoots += (Join-Path $env:XDG_DATA_HOME 'opencode')
+  }
+
+  foreach ($root in $authRoots) {
+    $auth = Join-Path $root 'auth.json'
+
+    if (Test-Path -LiteralPath $auth) {
+      Remove-Item -LiteralPath $auth -Force -ErrorAction SilentlyContinue
+      Ok ("removed " + $auth)
+    }
+  }
+
+  $stateRoot = $env:XDG_STATE_HOME
+
+  if (-not $stateRoot) {
+    $stateRoot = Join-Path $env:USERPROFILE '.local\\state'
+  }
+
+  $state = Join-Path $stateRoot 'opencode'
+  New-Item -ItemType Directory -Force -Path $state | Out-Null
+
+  Set-Content -LiteralPath (Join-Path $state 'focuscode-auth-reset') -Value '' -NoNewline -Force
+  Ok 'queued an auth purge for the next engine start'
 }
 
 $failure = $null
@@ -206,8 +293,30 @@ try {
   Step 'stopping the background engine so the fresh session starts clean...'
   StopEngine
 
+  Step 'clearing the stored auth identity so the next start reconnects fresh...'
+  ClearAuth
+
   $before = $null
   try { $before = TraceIp } catch {}
+
+  Step 'looking for the WARP client...'
+
+  if (-not $cli) {
+    $cli = WarpCli
+  }
+
+  if (-not $cli -and $needsInstall) {
+    try {
+      $cli = InstallWarp
+      Ok ("WARP installed at " + $cli)
+    } catch {
+      Bad ("WARP install failed: " + $_.Exception.Message)
+    }
+  }
+
+  if (-not $cli) {
+    throw 'no warp client is available.'
+  }
 
   Step 'asking Cloudflare for a fresh registration...'
 
@@ -296,9 +405,9 @@ try {
 # stops the engine bridge.
 if (-not $warpDone) {
   Write-Host ''
-  Bad "reset failed: $failure"
+  Bad $failure
 
-  Step 'falling back to a tor exit so the ip still changes...'
+  Step 'warp was stuck, so a tor exit takes over the ip change...'
 
   $torExe = FindTor
 
@@ -361,10 +470,12 @@ if (-not $warpDone) {
   if (-not $viaTor) {
     Step 'reconnecting the tunnel so the machine still has net...'
 
-    & $cli --accept-tos --no-ansi connect | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-      & $cli --accept-tos --no-ansi registration new | Out-Null
+    if ($cli) {
       & $cli --accept-tos --no-ansi connect | Out-Null
+      if ($LASTEXITCODE -ne 0) {
+        & $cli --accept-tos --no-ansi registration new | Out-Null
+        & $cli --accept-tos --no-ansi connect | Out-Null
+      }
     }
   }
 }

@@ -39,16 +39,17 @@ const installed: Partial<Record<NodeJS.Platform, readonly string[]>> = {
 export async function resetUsage(options: { automatic?: boolean } = {}): Promise<UsageResetResult> {
   const cli = await resolveCli()
 
-  if (!cli) return { status: "missing" }
+  if (process.platform !== "win32") {
+    if (!cli) return { status: "missing" }
+    if (await isManaged(cli)) return { status: "failed", reason: "managed" }
+    return resetInPlace(cli)
+  }
 
-  
-  if (await isManaged(cli)) return { status: "failed", reason: "managed" }
-
-
-  if (process.platform !== "win32") return resetInPlace(cli)
+  // Windows never blocks on a missing install: the reset window downloads and registers Cloudflare WARP itself.
+  if (cli && (await isManaged(cli))) return { status: "failed", reason: "managed" }
 
   try {
-    openConsole(cli, await restartCommand(), await proxyPort(cli), options.automatic === true)
+    openConsole(cli, await restartCommand(), cli ? await proxyPort(cli) : undefined, options.automatic === true, !cli)
   } catch (error) {
     return {
       status: "failed",
@@ -104,13 +105,13 @@ async function proxyPort(cli: string) {
   return 40000
 }
 
-function openConsole(cli: string, restart: RestartCommand, port: number | undefined, automatic: boolean) {
+function openConsole(cli: string | undefined, restart: RestartCommand, port: number | undefined, automatic: boolean, needsInstall: boolean) {
   const script = join(tmpdir(), `focuscode-usage-reset-${process.pid}.ps1`)
 
   
   writeFileSync(
     script,
-    `\uFEFF${consoleScript({ cli, restart, port, automatic, pid: process.pid })}`,
+    `\uFEFF${consoleScript({ cli, restart, port, automatic, needsInstall, pid: process.pid })}`,
     "utf8",
   )
 
